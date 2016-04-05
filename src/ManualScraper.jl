@@ -89,11 +89,11 @@ function scrape_gs200(inpath::AbstractString, outpath::AbstractString)
     insdict = Dict("module"=>"GS200", "type"=>"InsGS200", "make"=>"Yokogawa",
         "model"=>"GS200", "writeterminator"=>"")
     template(zip(commands,values,symbols,types),
-        ["cmd","values","symbols","type"], outpath, insdict)
+        ["cmd","values","symbols","type"], outpath, insdict=insdict, merge=true)
 end
 
 
-function scrape_ena(inpath::AbstractString, outpath::AbstractString)
+function scrape_ena(inpath::AbstractString, outpath::AbstractString, mergewith="")
 
     cmd_r = r"Syntax<\/a>[A-Za-z0-9<>\"=\\\/\s:]+(?:<\/p>)?<p>(:[:A-Za-z\(\)\-\{\}\[\]\|0-9<>\\?]+)\s*\{?(?:&lt;)?((?:numeric)?(?:string)?(?:[\[\]A-Z0-9\|]+)?)"s
 
@@ -135,17 +135,15 @@ function scrape_ena(inpath::AbstractString, outpath::AbstractString)
     insdict = Dict("module"=>"E5071C", "type"=>"InsE5071C", "make"=>"Keysight",
         "model"=>"E5071C", "writeterminator"=>"")
     template(zip(commands,values,types,docs),
-        ["cmd","values","type","docs"], outpath, insdict)
+        ["cmd","values","type","docs"], outpath,
+        insdict=insdict, merge=true)
 end
 
 
 """
-`template(data, labels, outpath::AbstractString,
-    insdict=Dict("module"=>"",
-                 "type"=>"",
-                 "make"=>"",
-                 "model"=>"",
-                 "writeterminator"=>"")`
+`template(data, labels, outpath::AbstractString;
+    insdict=emptyinsdict(),
+    merge::Bool=true)`
 
 Writes a JSON file given `data` and `labels`. For example:
 
@@ -155,19 +153,74 @@ labels = ["cmd", "values", "type"]
 template(data, labels, "/my/path.json")
 ```
 
-Optionally `insdict` can be provided or it may be filled in later in the JSON file.
-"""
-function template(data, labels, outpath::AbstractString,
-    insdict=Dict("module"=>"",
-                 "type"=>"",
-                 "make"=>"",
-                 "model"=>"",
-                 "writeterminator"=>""))
+Optionally `insdict` can be provided for the `"instrument"` field of the resulting
+JSON file, or if not provided a template is included to be filled in later.
 
-    proparr = []
-    for x in data
-        push!(proparr,Dict(zip(labels,x)))
+
+If `merge` is true, then the fields of any JSON file at `outpath` are retained
+and only previously undefined fields are added to the file in the corresponding
+locations. The `cmd` field of a property dictionary is used to distinguish
+different instrument properties. It is recommended to work on a duplicate of
+the original file.
+"""
+function template(data, labels, outpath::AbstractString;
+    insdict=emptyinsdict(),
+    merge::Bool=true)
+
+    if merge == true
+        local r
+        try
+            r = JSON.parsefile(outpath)
+        catch e
+            warn("No file found at `outpath` to merge with. Writing a new template.")
+            return template(data, labels, outpath, insdict=insdict, merge=false)
+        end
+
+        # Keep all of the old instrument key/value pairs.
+        if haskey(r, "instrument")
+            oldid = r["instrument"]
+            for k in keys(oldid)
+                insdict[k] = oldid[k]
+            end
+        end
+
+        # As a starting point go with the old properties array.
+        if haskey(r, "properties")
+            proparr = r["properties"]
+        else
+            proparr = []
+        end
+
+        # Now process the new properties and merge with the old
+        for x in data
+            d = Dict(zip(labels, x))
+            # Any identical entries, looking at cmd field?
+            where = find(y->(y["cmd"]==d["cmd"]), proparr)
+            # If not, add it
+            if length(where) == 0
+                push!(proparr, d)
+            else
+                # If more than one, warn and drop all but the first
+                if length(where) > 1
+                    warn("Duplicate `cmd` key: $(d["cmd"])")
+                    deleteat!(proparr, where[2:end])
+                end
+                idx = where[1]
+                olddict = proparr[idx]
+                for k in keys(olddict)
+                    d[k] = olddict[k]
+                end
+                proparr[idx] = d
+            end
+        end
+    else
+        # Just start from scratch
+        proparr = []
+        for x in data
+            push!(proparr, Dict(zip(labels, x)))
+        end
     end
+
     temp = Dict("instrument"=>insdict, "properties"=>proparr)
 
     # Write the dictionary to JSON
@@ -176,13 +229,33 @@ function template(data, labels, outpath::AbstractString,
     end
 end
 
-"Returns a string based on a command, e.g. `:SOURCE:FUNCTION` becomes SourceFunction."
+"""
+`emptyinsdict()`
+
+Returns a `Dict` intended to be used in an instrument JSON file for the "instrument"
+dictionary. It has the expected keys and corresponding empty string values.
+"""
+emptyinsdict() = Dict("module" => "",
+                      "type"   => "",
+                      "make"   => "",
+                      "model"  => "",
+                      "writeterminator" => "")
+
+"""
+`cmdtostr(a::AbstractString)`
+
+Returns a string based on a command, e.g. ":SOURCE:FUNCTION" becomes "SourceFunction".
+"""
 function cmdtostr(a::AbstractString)
     s = mapreduce(upperfirst, *, "", split(a,":"))
     replace(s, r"[^A-Za-z]", "")    # only text
 end
 
-"Returns a string based on `a` with the first character only in uppercase."
+"""
+`upperfirst(a::AbstractString)`
+
+Returns a string based on `a` with the first character only in uppercase.
+"""
 function upperfirst(a::AbstractString)
     length(a) == 0 && return a
     a = lowercase(a)
