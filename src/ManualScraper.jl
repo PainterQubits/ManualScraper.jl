@@ -1,9 +1,117 @@
 module ManualScraper
 using CHM
 import JSON
+import Base: contains, delete!, show
+
+export CHMSource
+export Parser
+export @ena_str
 
 export scrape_gs200
 export scrape_ena
+
+# Directories to pull from inside ENA's help file.
+const ENA_DIRS = map(x->"/Programming/Command_Reference/"*x,
+    ["ABORT", "CALCULATE", "CONTROL", "DISPLAY", "FORMAT", "HCOPY", #"IEEE",
+    "INIT", "LXI", "MEMORY", "OUTPUT", "PROGRAM", "SENSE",
+    "SERVICE", "SOURCE", "STATUS", "SYSTEM", "TRIGGER"])
+
+# Files to pull from inside ENA's help file.
+const ENA_FILTER = r".htm$"
+
+# This is necessary due to inconsistencies in a few of the HTML files.
+const ENA_INIT = [
+    ("<br />", ""),
+    ("<br>", ""),
+    (" - ", ""),
+    ("<span class=\"Times\">", ""),
+    ("</span",""),
+    ("[:STATe]{", " {"),
+    ("SENSe([1]-160)", "SENSe{[1]-160}"),
+    ("SENSe[1-160]", "SENSe{[1]-160}"),
+    ("PORT([1]-4)", "PORT{[1]-4}")
+]
+
+# Logic: Start with Syntax, then have any typical HTML characters until a colon,
+# which must be preceeded by a right angle bracket (>); following the colon, there
+# must not be an HTML tag. Then a SCPI command follows...
+const ENA_REGEX = r"Syntax[A-Za-z0-9<>\"=\\\/\s:_&#;]+(?<=>)(?P<cmd>:(?!<\/?\w+((\s+\w+(\s*=\s*(?:\".*?\"|'.*?'|[\^'\">\s]+))?)+\s*|\s*)\/?>)[:A-Za-z\(\)\-\{\}\[\]\|0-9\\?\n\r]+)\s*\{?(?:&lt;)?(?P<val>(?:numeric)?(?:string)?(?:[\[\]A-Z0-9\|]+)?)"s
+
+const ENA_CMD_PASS1 = [
+    # Strip junk: stray HTML tag snippets
+    (r"<[A-Za-z0-9]+>?", s""),
+    (r"[<>]+",           s""),
+
+    # Strip newline and form feeds
+    (r"[\r\n]+", ""),
+
+    # Strip optional segments of command
+    (r"\[:[:A-Za-z]+\]", s"")
+]
+
+const ENA_CMD_PASS2 = [
+    # Strip lowercase parts
+    (r"[a-z]+",                    ""),
+    (r"(BPOR)\{[\[\]0-9\-\|]+\}",  s"\1bp"),
+    (r"(:C)\{[\[\]0-9\-\|]+\}",    s"\1el"),
+    (r"(CALC)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
+    (r"(CHAN)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
+    (r"(FREQ)\{[\[\]0-9\-\|]+\}",  s"\1freq"),
+    (r"(:G)\{[\[\]0-9\-\|]+\}",    s"\1el"),
+    (r"(INCL)\{[\[\]0-9\-\|]+\}",  s"\1incl"),
+    (r"(:L)\{[\[\]0-9\-\|]+\}",    s"\1el"),
+    (r"(LOSS)\{[\[\]0-9\-\|]+\}",  s"\1loss"),
+    (r"(MARK)\{[\[\]0-9\-\|]+\}",  s"\1m"),
+    (r"(MULT)\{[\[\]0-9\-\|]+\}",  s"\1mult"),
+    (r"(NETW)\{[\[\]0-9\-\|]+\}",  s"\1netw"),
+    (r"(PAR)\{[\[\]0-9\-\|]+\}",   s"\1par"),
+    (r"(PORT)\{[\[\]0-9\-\|]+\}",  s"\1port"),
+    (r"(:R)\{[\[\]0-9\-\|]+\}",    s"\1el"),
+    (r"(SENS)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
+    (r"(SOUR)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
+    (r"(TRAC)\{[\[\]0-9\-\|]+\}",  s"\1tr"),
+    (r"(WIND)\{[\[\]0-9\-\|]+\}",  s"\1ch")
+]
+
+const ENA_VAL_PASS1 = [
+    ("ON|OFF|1|0", "v::Bool")
+]
+
+const ENA_VAL_PASS2 = []
+
+immutable CHMSource
+    path::AbstractString
+    dirs::AbstractArray
+    filter::Regex
+end
+show(io::IO, x::CHMSource) = print(io, "CHM source at: $(x.path)")
+
+immutable Parser
+    init::AbstractArray
+    regex::Regex
+    cmd1::AbstractArray
+    cmd2::AbstractArray
+    val1::AbstractArray
+    val2::AbstractArray
+end
+
+const ENA_PARSER =
+    Parser(ENA_INIT, ENA_REGEX, ENA_CMD_PASS1, ENA_CMD_PASS2,
+        ENA_VAL_PASS1, ENA_VAL_PASS2)
+
+macro ena_str(path)
+    CHMSource(path, ENA_DIRS, ENA_FILTER)
+end
+
+"""
+`capture_names(r::Regex)`
+
+Returns a ValueIterator of the capture group names for a given Regex.
+Test to see if a name is there via: `"abc" in capture_names(r)`
+"""
+function capture_names(r::Regex)
+    values(Base.PCRE.capture_names(r.regex))
+end
 
 """
 Function used to scrape information out of the Yokogawa GS200 manual.
@@ -93,50 +201,113 @@ function scrape_gs200(inpath::AbstractString, outpath::AbstractString)
 end
 
 
-function scrape_ena(inpath::AbstractString, outpath::AbstractString, mergewith="")
-
-    cmd_r = r"Syntax<\/a>[A-Za-z0-9<>\"=\\\/\s:]+(?:<\/p>)?<p>(:[:A-Za-z\(\)\-\{\}\[\]\|0-9<>\\?]+)\s*\{?(?:&lt;)?((?:numeric)?(?:string)?(?:[\[\]A-Z0-9\|]+)?)"s
+function scrape_ena(src::CHMSource, p::Parser, outpath::AbstractString; merge::Bool=true,
+    insdict=emptyinsdict())
 
     docs = UTF8String[]
     commands = ASCIIString[]
     types = ASCIIString[]
     values = []
+    ids = Int64[]
 
-    f=CHM.open(inpath)
+    flag = true
+    f=CHM.open(src.path)
+    id=0
     try
-        prefix = "/Programming/Command_Reference/"
-        cats = ["ABORT", "CALCULATE", "CONTROL", "DISPLAY", "FORMAT", "HCOPY",
-                "IEEE", "INIT", "LXI", "MEMORY", "OUTPUT", "PROGRAM", "SENSE",
-                "SERVICE", "SOURCE", "STATUS", "SYSTEM", "TRIGGER"]
-        for directory in cats
-            files = CHM.readdir(f, prefix*directory)
+        for directory in src.dirs
+            files = CHM.readdir(f, directory)
+            deleteat!(files, find(x->(match(src.filter, x) == nothing), files))
             for file in files
+                id += 1
                 text = CHM.retrieve(f, file)
-                entries = eachmatch(cmd_r, text)
-                # length(entries) > 1 && info("Multiple commands in file: $file")
-                for e in entries
-                    push!(commands, e[1])
-                    push!(types, cmdtostr(e[1]))
-                    opt = e[2]
-                    push!(values, opt)
+                for x in p.init
+                    text = replace(text, x...)
                 end
+                entries = eachmatch(p.regex, text)
+
+                # length(entries) > 1 && info("Multiple commands in file: $file")
+                i = 0
+                for e in entries
+                    rawcmd = e[:cmd]
+
+                    for x in p.cmd1
+                        rawcmd = replace(rawcmd, x...)
+                    end
+                    push!(types, cmdtostr(rawcmd))
+                    for x in p.cmd2
+                        rawcmd = replace(rawcmd, x...)
+                    end
+                    push!(commands, rawcmd)
+
+                    if contains(rawcmd, ["{", "(", "["])
+                        if contains(rawcmd, ["}", ")", "]"])
+                            warn("Uncaught braces in $rawcmd")
+                        else
+                            warn("Suspect an incomplete command $rawcmd")
+                            flag = diagnose(text)
+                        end
+                    else
+                        info("Processed $rawcmd")
+                    end
+
+                    val = e[:val]
+                    for x in p.val1
+                        val = replace(val, x...)
+                    end
+                    for x in p.val2
+                        val = replace(val, x...)
+                    end
+                    push!(values, val)
+
+                    i+=1
+                end
+
+                i == 0 && warn("Could not parse command in file: $file")
+                if flag && i == 0
+                    flag = diagnose(text)
+                end
+                i == 0 && continue
+                i > 1 && warn("Multiple matches in file: $file")
+
                 # escape parentheses
                 file = replace(file, "(", "%28")
                 file = lowercase(replace(file, ")", "%29"))
                 url = "http://ena.support.keysight.com/e5071c/manuals/webhelp/eng/"
                 file = "- [External documentation]($url$file)"
                 push!(docs, file)
+                push!(ids, id)
             end
         end
     finally
         CHM.close(f)
     end
 
-    insdict = Dict("module"=>"E5071C", "type"=>"InsE5071C", "make"=>"Keysight",
-        "model"=>"E5071C", "writeterminator"=>"")
-    template(zip(commands,values,types,docs),
-        ["cmd","values","type","docs"], outpath,
-        insdict=insdict, merge=true)
+    length(commands) == length(values) == length(types) == length(docs) ||
+        error("It looks like not all the fields may be in sync!")
+
+    template(zip(commands,values,types,docs,ids),
+        ["cmd","values","type","docs","id"], outpath,
+        insdict=insdict, merge=merge)
+end
+
+"""
+`delete!(inpath::AbstractString, itr)`
+
+Delete entries from the property dictionary at key values given by `itr`.
+"""
+function delete!(path::AbstractString, itr)
+    # splitext(inpath)[2] == ".json" || error("Not a JSON file.")
+    r = JSON.parsefile(path)
+    d = r["properties"]
+    for i in itr
+        if haskey(d, i)
+            delete(d, i)
+        end
+    end
+    r["properties"] = d
+    open(path, "w") do f
+        JSON.print(f, r, 4)
+    end
 end
 
 
@@ -229,6 +400,39 @@ function template(data, labels, outpath::AbstractString;
     end
 end
 
+# # # ### Utility functions ### # # #
+
+"""
+`cmdtostr(a::AbstractString)`
+
+Returns a string based on a command, e.g. ":SOURCE:FUNCTION" becomes "SourceFunction".
+"""
+function cmdtostr(a::AbstractString)
+    s = mapreduce(upperfirst, *, "", split(a,":"))
+    replace(s, r"[^A-Za-z]", "")    # only text
+end
+
+"""
+`diagnose(text)`
+
+Sets up an interactive prompt for diagnosing issues with files that are not
+correctly parsed by the given regular expressions. This is called e.g. whenever
+a .chm file is scraped, not directly by the user.
+"""
+function diagnose(text)
+    println("Here are the pre-processed file contents:")
+    println(text)
+    println("\nHow do you want to proceed? [i=ignoreall, a=abort, anything else to continue]")
+    response = chomp(readline())
+    if response == "a" || response == "abort"
+        error("Aborted!")
+    elseif response == "i" || replace(response," ","") == "ignoreall"
+        return false
+    else
+        return true
+    end
+end
+
 """
 `emptyinsdict()`
 
@@ -242,16 +446,6 @@ emptyinsdict() = Dict("module" => "",
                       "writeterminator" => "")
 
 """
-`cmdtostr(a::AbstractString)`
-
-Returns a string based on a command, e.g. ":SOURCE:FUNCTION" becomes "SourceFunction".
-"""
-function cmdtostr(a::AbstractString)
-    s = mapreduce(upperfirst, *, "", split(a,":"))
-    replace(s, r"[^A-Za-z]", "")    # only text
-end
-
-"""
 `upperfirst(a::AbstractString)`
 
 Returns a string based on `a` with the first character only in uppercase.
@@ -260,6 +454,15 @@ function upperfirst(a::AbstractString)
     length(a) == 0 && return a
     a = lowercase(a)
     string(uppercase(a[1]))*a[2:end]
+end
+
+"""
+`contains(haystack::AbstractString, needles::AbstractArray)`
+
+Implementation of `contains` for multiple needles...
+"""
+function contains(string::AbstractString, strings::AbstractArray)
+    mapreduce(x->contains(string,x), |, false, strings)
 end
 
 end # module

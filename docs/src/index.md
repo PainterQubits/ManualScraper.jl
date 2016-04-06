@@ -46,6 +46,7 @@ API
 ---
 
     {docs}
+    man_str
     ManualScraper.template
     ManualScraper.cmdtostr
     ManualScraper.emptyinsdict
