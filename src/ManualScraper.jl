@@ -145,13 +145,12 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
 
     flag = true
     f=CHM.open(src.path)
-    id=0
+    id=1
     try
         for directory in src.dirs
             files = CHM.readdir(f, directory)
             deleteat!(files, find(x->(match(src.filter, x) == nothing), files))
             for file in files
-                id += 1
                 text = CHM.retrieve(f, file)
 
                 # Initial pass of text replacement to correct inconsistencies.
@@ -204,7 +203,14 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     continue
                 end
 
-                # finishfile!(_set, _get, _cmds, _types, _args, _rettypes, _docs, ids)
+                _getargs, _setargs, _ids =
+                    finishfile!(src, _set, _get, _cmds, _types, _args, _rettypes, _docs, id)
+                for (x,y) in [(cmds, _cmds), (types, _types), (getargs, _getargs),
+                    (setargs, _setargs), (rettypes, _rettypes), (docs, _docs), (ids, _ids)]
+                    for z in y
+                        push!(x,z)
+                    end
+                end
             end
         end
     finally
@@ -228,7 +234,7 @@ function cangetset(src::CHMSource, text)
     for e in entries
         get = false
         set = false
-        for i in 1:2
+        for i in 1:3
             ans = (e[i] == nothing ? "" : e[i])
             get |= (lowercase(ans) == "read" ? true : false)
             set |= (lowercase(ans) == "write" ? true : false)
@@ -288,6 +294,55 @@ function rettype(src::CHMSource, text)
         push!(rettypes, e)
     end
     rettypes
+end
+
+rettype(src::CHMSource{ENA.SYM}, text) = [nothing]
+
+function finishfile!(src::CHMSource{ENA.SYM}, _set, _get, _cmds, _types, _args, _rettypes, _docs, id)
+
+    getargs = []
+    setargs = []
+    set = _set[1]
+    get = _get[1]
+    !set && !get && warn("Neither read nor write in `finishfile!`.")
+
+    if !set && get# read only
+        for i in _args
+            push!(getargs, i)
+            push!(setargs, nothing)
+        end
+    elseif !get && set# write only
+        for i in _args
+            push!(setargs, i)
+            push!(getargs, nothing)
+        end
+    else
+        getinds = find(x->x[end]=='?', _cmds)
+        setinds = find(x->x[end]!='?', _cmds)
+        for i in setinds
+            push!(setargs, _args[i])
+            push!(getargs, _args[i+1])
+        end
+        deleteat!(_cmds, getinds)
+    end
+
+    # Documentation goes on all the commands
+    d = _docs[1]
+    while length(_docs) < length(_cmds)
+        push!(_docs, d)
+    end
+
+    ids = collect((1:length(_cmds))+(id-1))
+
+    println(_cmds)
+    println(_types)
+    println(getargs)
+    println(setargs)
+    println(_docs)
+    chomp(readline())
+
+    getargs, setargs, ids
+
 end
 
 """

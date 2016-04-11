@@ -14,6 +14,7 @@ const FILTER = r".htm$"
 
 # This is necessary due to inconsistencies in the HTML files.
 const INIT = [
+
     # Remove certain tags that randomly interrupt command syntax
     ("<br />", ""),
     ("<br>", ""),
@@ -53,29 +54,16 @@ const INIT = [
     (":[EXTernal]", "[:EXTernal]"),
     ("CALCulate[1-160]", "CALCulate{[1]-160}"),
     (r"STARt\|\s+STOP", "STARt|STOP"),
-    (r"R</p>\s+<p>1|R2|R3", "R1|R2|R3"),
+    (r"R<\/p>\s+<p>1|R2|R3", "R1|R2|R3"),
     (r"(EXTernal.SLOPe<\/h1>[\s]+<h2>Object type<\/h2>[\s]+<p>Property)(</p>)", s"\1 (Read-Write)\2"),
     (r"(REPort\.DATA[<>\/A-Za-z0-9\s=\"\-:';.&#]+<p>Property)(<\/p>)", s"\1 (Read-Only)\2"),
     (r"(&lt;string 1&gt;)(&lt;\^END&gt;)", s"\1&lt;newline&gt;\2"),
     (r"&lt;1/0&gt;(&lt;\^END&gt;)", s"{1|0}&lt;newline&gt;\1"),
     ("{1/0}","{1|0}"),
-    (r"&lt;string \(&quot;n, m, l...&quot;\)&gt;\s*", "&lt;string&gt;</p>\r\n<p>"),
+    (r"&lt;string \(&quot;n, m, l\.\.\.&quot;\)&gt;\s*", "&lt;string&gt;</p>\r\n<p>"),
     (r"(&lt;string&gt;)\s+(:CALCulate\{\[1\]\-160\})", s"\1</p>\r\n<p>\2"),
     # ("&lt;numeric&gt;", "{numeric}"),
     # ("&lt;value&gt;", "{value}"),
-    (r"\{numeric 1\},,\{numeric NOP\?2\?\(number\s*of specified traces\)\}", "{array}"),
-    ("&lt;numeric1&gt;,,&lt;numeric N&gt;&lt;^END&gt;", "{array}&lt;newline&gt;&lt;^END&gt;"),
-    ("{numeric 1},,{numeric NOP?2}", "{array}"),
-    ("&lt;numeric1&gt;,,&lt;numeric NOP?2&gt;", "{array}&lt;newline&gt;"),
-    ("&lt;numeric1&gt;,,&lt;numeric N*2&gt;", "{array}&lt;newline&gt;"),
-    (r"\{numeric 1\},\s*\.\.\.\s*,\{numeric 1\+\(N\*5\)\}","{array}"),
-    ("{numeric 1},,{numeric 1+(Nx4)}","{array}"),
-    ("{numeric 1},,{numeric 1+Nx3}","{array}"),
-    ("{numeric 1},{numeric 2},...,{numeric N}","{array}"),
-    ("{numeric 1}, ...,{numeric NOP*2}", "{array}"),
-    ("{numeric 1},...,{numeric NOP}","{array}"),
-    ("{value 1},...,{value NOP}","{array}"),
-    ("R1|R1|R2|R3}", ""),
 
     # Make parsing more convenient in a few special cases
     (r";([A-Za-z]+)\s+([0-9])&", s";\1\2&"),
@@ -88,6 +76,21 @@ const INIT = [
     (r"(TRANsfer<\/h1>\s+<p>)No equivalent COM Commands(<\/p>)", s"\1Property (Read-Write)\2"),
     (r"(LOAD:PROGram<\/h1>\s+<p>)No equivalent COM Commands(<\/p>)", s"\1Property (Write-Only)\2"),
     (r"(STORe:PROGram<\/h1>\s+<p>)No equivalent COM Commands(<\/p>)", s"\1Property (Write-Only)\2"),
+
+    # (r"{numeric 1},,{numeric NOP.2.\(number\s+of specified traces\)}", "{array}"),
+    # ("&lt;numeric1&gt;,,&lt;numeric N&gt;&lt;^END&gt;", "{array}&lt;newline&gt;&lt;^END&gt;"),
+    # ("{numeric 1},,{numeric NOP?2}", "{array}"),
+    # ("&lt;numeric1&gt;,,&lt;numeric NOP?2&gt;", "{array}&lt;newline&gt;"),
+    # ("&lt;numeric1&gt;,,&lt;numeric N*2&gt;", "{array}&lt;newline&gt;"),
+    # (r"\{numeric 1\},\s*\.\.\.\s*,\{numeric 1\+\(N\*5\)\}","{array}"),
+    # ("{numeric 1},,{numeric 1+(Nx4)}","{array}"),
+    # ("{numeric 1},,{numeric 1+Nx3}","{array}"),
+    # ("{numeric 1},{numeric 2},...,{numeric N}","{array}"),
+    # ("{numeric 1}, ...,{numeric NOP*2}", "{array}"),
+    # ("{numeric 1},...,{numeric NOP}","{array}"),
+    # ("{value 1},...,{value NOP}","{array}"),
+    # ("R1|R1|R2|R3}", ""),
+
 ]
 
 # Determine if the commands are for read/write, read, or write
@@ -161,10 +164,10 @@ const CMD_PASS2 = [
 const ARG_PASS = [
     ("ON|OFF|1|0", "v::Bool"),
     ("numeric", "v::Real"),
-
+    ("&lt;string&gt;", "v::AbstractString"),
 ]
 
-const RETTYPE_REGEX = r"[Qq]uery [Rr]esponse<\/h[0-9]>\s+<p>(?:\{([A-Za-z0-9,_\-\|…\.\(\)\/\s]+)\},*\s*)*&lt;newline"
+const RETTYPE_REGEX = r"[Qq]uery [Rr]esponse<\/h[0-9]>\s+<p>(?:\{([A-Za-z0-9,_\-\?\|…\.\(\)\/\s]+)\},*\s*)*&lt;newline"
 
 const PARSER = Parser(INIT, GETSET_REGEX, CMD_REGEX, RETTYPE_REGEX,
     CMD_PASS1, CMD_PASS2, ARG_PASS)
