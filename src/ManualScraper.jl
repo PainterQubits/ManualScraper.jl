@@ -324,6 +324,7 @@ function finishfile!(src::CHMSource{ENA.SYM}, _set, _get, _cmds, _types, _args, 
             push!(getargs, _args[i+1])
         end
         deleteat!(_cmds, getinds)
+        deleteat!(_types, getinds)
     end
 
     # Documentation goes on all the commands
