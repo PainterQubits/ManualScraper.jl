@@ -1,5 +1,6 @@
 module ManualScraper
 using CHM
+using DataStructures
 import JSON
 import Base: contains, delete!, show
 
@@ -7,100 +8,30 @@ export CHMSource
 export Parser
 export @ena_str
 
-export scrape_gs200
-export scrape_ena
-
-# Directories to pull from inside ENA's help file.
-const ENA_DIRS = map(x->"/Programming/Command_Reference/"*x,
-    ["ABORT", "CALCULATE", "CONTROL", "DISPLAY", "FORMAT", "HCOPY", #"IEEE",
-    "INIT", "LXI", "MEMORY", "OUTPUT", "PROGRAM", "SENSE",
-    "SERVICE", "SOURCE", "STATUS", "SYSTEM", "TRIGGER"])
-
-# Files to pull from inside ENA's help file.
-const ENA_FILTER = r".htm$"
-
-# This is necessary due to inconsistencies in a few of the HTML files.
-const ENA_INIT = [
-    ("<br />", ""),
-    ("<br>", ""),
-    (" - ", ""),
-    ("<span class=\"Times\">", ""),
-    ("</span",""),
-    ("[:STATe]{", " {"),
-    ("SENSe([1]-160)", "SENSe{[1]-160}"),
-    ("SENSe[1-160]", "SENSe{[1]-160}"),
-    ("PORT([1]-4)", "PORT{[1]-4}")
-]
-
-# Logic: Start with Syntax, then have any typical HTML characters until a colon,
-# which must be preceeded by a right angle bracket (>); following the colon, there
-# must not be an HTML tag. Then a SCPI command follows...
-const ENA_REGEX = r"Syntax[A-Za-z0-9<>\"=\\\/\s:_&#;]+(?<=>)(?P<cmd>:(?!<\/?\w+((\s+\w+(\s*=\s*(?:\".*?\"|'.*?'|[\^'\">\s]+))?)+\s*|\s*)\/?>)[:A-Za-z\(\)\-\{\}\[\]\|0-9\\?\n\r]+)\s*\{?(?:&lt;)?(?P<val>(?:numeric)?(?:string)?(?:[\[\]A-Z0-9\|]+)?)"s
-
-const ENA_CMD_PASS1 = [
-    # Strip junk: stray HTML tag snippets
-    (r"<[A-Za-z0-9]+>?", s""),
-    (r"[<>]+",           s""),
-
-    # Strip newline and form feeds
-    (r"[\r\n]+", ""),
-
-    # Strip optional segments of command
-    (r"\[:[:A-Za-z]+\]", s"")
-]
-
-const ENA_CMD_PASS2 = [
-    # Strip lowercase parts
-    (r"[a-z]+",                    ""),
-    (r"(BPOR)\{[\[\]0-9\-\|]+\}",  s"\1bp"),
-    (r"(:C)\{[\[\]0-9\-\|]+\}",    s"\1el"),
-    (r"(CALC)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
-    (r"(CHAN)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
-    (r"(FREQ)\{[\[\]0-9\-\|]+\}",  s"\1freq"),
-    (r"(:G)\{[\[\]0-9\-\|]+\}",    s"\1el"),
-    (r"(INCL)\{[\[\]0-9\-\|]+\}",  s"\1incl"),
-    (r"(:L)\{[\[\]0-9\-\|]+\}",    s"\1el"),
-    (r"(LOSS)\{[\[\]0-9\-\|]+\}",  s"\1loss"),
-    (r"(MARK)\{[\[\]0-9\-\|]+\}",  s"\1m"),
-    (r"(MULT)\{[\[\]0-9\-\|]+\}",  s"\1mult"),
-    (r"(NETW)\{[\[\]0-9\-\|]+\}",  s"\1netw"),
-    (r"(PAR)\{[\[\]0-9\-\|]+\}",   s"\1par"),
-    (r"(PORT)\{[\[\]0-9\-\|]+\}",  s"\1port"),
-    (r"(:R)\{[\[\]0-9\-\|]+\}",    s"\1el"),
-    (r"(SENS)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
-    (r"(SOUR)\{[\[\]0-9\-\|]+\}",  s"\1ch"),
-    (r"(TRAC)\{[\[\]0-9\-\|]+\}",  s"\1tr"),
-    (r"(WIND)\{[\[\]0-9\-\|]+\}",  s"\1ch")
-]
-
-const ENA_VAL_PASS1 = [
-    ("ON|OFF|1|0", "v::Bool")
-]
-
-const ENA_VAL_PASS2 = []
-
-immutable CHMSource
-    path::AbstractString
-    dirs::AbstractArray
-    filter::Regex
-end
-show(io::IO, x::CHMSource) = print(io, "CHM source at: $(x.path)")
+export scrape
 
 immutable Parser
     init::AbstractArray
-    regex::Regex
+    getset::Regex
+    cmd::Regex
+    rettype::Regex
     cmd1::AbstractArray
     cmd2::AbstractArray
-    val1::AbstractArray
-    val2::AbstractArray
+    val::AbstractArray
 end
 
-const ENA_PARSER =
-    Parser(ENA_INIT, ENA_REGEX, ENA_CMD_PASS1, ENA_CMD_PASS2,
-        ENA_VAL_PASS1, ENA_VAL_PASS2)
+immutable CHMSource{T}
+    path::AbstractString
+    dirs::AbstractArray
+    filter::Regex
+    parser::Parser
+end
+show(io::IO, x::CHMSource) = print(io, "CHM source at: $(x.path)")
+
+include("ENA.jl")
 
 macro ena_str(path)
-    CHMSource(path, ENA_DIRS, ENA_FILTER)
+    CHMSource{ENA.SYM}(path, ENA.DIRS, ENA.FILTER, ENA.PARSER)
 end
 
 """
@@ -118,7 +49,7 @@ Function used to scrape information out of the Yokogawa GS200 manual.
 The manual should be exported to plain text using Adobe Acrobat as other
 choices seem to give poor results.
 """
-function scrape_gs200(inpath::AbstractString, outpath::AbstractString)
+function scrape(inpath::AbstractString, outpath::AbstractString)
     f = open(inpath)
     str = readall(f)
     close(f)
@@ -201,13 +132,15 @@ function scrape_gs200(inpath::AbstractString, outpath::AbstractString)
 end
 
 
-function scrape_ena(src::CHMSource, p::Parser, outpath::AbstractString; merge::Bool=true,
+function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
     insdict=emptyinsdict())
 
+    cmds = []
+    types = []
+    setargs = []
+    getargs = []
+    rettypes = []
     docs = UTF8String[]
-    commands = ASCIIString[]
-    types = ASCIIString[]
-    values = []
     ids = Int64[]
 
     flag = true
@@ -220,74 +153,141 @@ function scrape_ena(src::CHMSource, p::Parser, outpath::AbstractString; merge::B
             for file in files
                 id += 1
                 text = CHM.retrieve(f, file)
-                for x in p.init
+
+                # Initial pass of text replacement to correct inconsistencies.
+                for x in src.parser.init
                     text = replace(text, x...)
                 end
-                entries = eachmatch(p.regex, text)
 
-                # length(entries) > 1 && info("Multiple commands in file: $file")
-                i = 0
-                for e in entries
-                    rawcmd = e[:cmd]
+                # Parse for get / set capability.
+                _get, _set = cangetset(src, text)
+                if length(_get) == 0 || length(_set) == 0
+                    flag && (flag = diagnose(text, "Could not determine read/write capability."))
+                    continue
+                end
+                println(_get, _set)
 
-                    for x in p.cmd1
-                        rawcmd = replace(rawcmd, x...)
-                    end
-                    push!(types, cmdtostr(rawcmd))
-                    for x in p.cmd2
-                        rawcmd = replace(rawcmd, x...)
-                    end
-                    push!(commands, rawcmd)
-
-                    if contains(rawcmd, ["{", "(", "["])
-                        if contains(rawcmd, ["}", ")", "]"])
-                            warn("Uncaught braces in $rawcmd")
+                _cmds, _types, _args = commands(src, text)
+                len = length(_cmds)
+                if len == 0
+                    flag && (flag = diagnose(text, "Could not parse command in file: $file"))
+                    continue
+                elseif len > 2
+                    info("$len matches in file: $file")
+                end
+                flag2 = false
+                for cmd in _cmds
+                    if contains(cmd, ["{", "(", "["])
+                        if contains(cmd, ["}", ")", "]"])
+                            warn("Uncaught braces in $cmd")
                         else
-                            warn("Suspect an incomplete command $rawcmd")
-                            flag = diagnose(text)
+                            flag && (flag = diagnose(text, "Suspect an incomplete command $cmd"))
+                            flag2 = true
                         end
-                    else
-                        info("Processed $rawcmd")
                     end
+                end
+                flag2 && continue
+                println(_cmds,_types,_args)
 
-                    val = e[:val]
-                    for x in p.val1
-                        val = replace(val, x...)
-                    end
-                    for x in p.val2
-                        val = replace(val, x...)
-                    end
-                    push!(values, val)
+                _rettypes = rettype(src, text)
+                len = length(_rettypes)
+                if len == 0 && reduce(|, _get)
+                    flag && (flag = diagnose(text, "Could not parse return types in file: $file"))
+                    continue
+                end
+                println(_rettypes)
 
-                    i+=1
+                _docs = doc(src, file, text)
+                len = length(_docs)
+                if len == 0
+                    flag && (flag = diagnose(text, "Could not parse for documentation in file: $file"))
+                    continue
                 end
 
-                i == 0 && warn("Could not parse command in file: $file")
-                if flag && i == 0
-                    flag = diagnose(text)
-                end
-                i == 0 && continue
-                i > 1 && warn("Multiple matches in file: $file")
-
-                # escape parentheses
-                file = replace(file, "(", "%28")
-                file = lowercase(replace(file, ")", "%29"))
-                url = "http://ena.support.keysight.com/e5071c/manuals/webhelp/eng/"
-                file = "- [External documentation]($url$file)"
-                push!(docs, file)
-                push!(ids, id)
+                # finishfile!(_set, _get, _cmds, _types, _args, _rettypes, _docs, ids)
             end
         end
     finally
         CHM.close(f)
     end
 
-    length(commands) == length(values) == length(types) == length(docs) ||
-        error("It looks like not all the fields may be in sync!")
+    # length(commands) == length(types) == length(docs) ||
+        # error("It looks like not all the fields may be in sync!")
 
-    template(zip(commands,values,types,docs,ids),
-        ["cmd","values","type","docs","id"], outpath,
-        insdict=insdict, merge=merge)
+    # template(zip(commands,setargs,getargs,types,docs),
+    #         ["cmd","setargs","getargs","type","docs"],
+    #         ids, outpath, insdict=insdict, merge=merge)
+end
+
+function cangetset(src::CHMSource, text)
+    p = src.parser
+    entries = eachmatch(p.getset, text)
+
+    getarray = Bool[]
+    setarray = Bool[]
+    for e in entries
+        get = false
+        set = false
+        for i in 1:2
+            ans = (e[i] == nothing ? "" : e[i])
+            get |= (lowercase(ans) == "read" ? true : false)
+            set |= (lowercase(ans) == "write" ? true : false)
+        end
+        push!(getarray, get)
+        push!(setarray, set)
+    end
+
+    getarray, setarray
+end
+
+function commands(src::CHMSource, text)
+    p = src.parser
+    entries = eachmatch(p.cmd, text)
+
+    cmds = ASCIIString[]
+    types = ASCIIString[]
+    args = []
+
+    for e in entries
+        rawcmd = e[1]
+        for x in p.cmd1
+            rawcmd = replace(rawcmd, x...)
+        end
+        push!(types, cmdtostr(rawcmd))
+
+        for x in p.cmd2
+            rawcmd = replace(rawcmd, x...)
+        end
+        push!(cmds, rawcmd)
+
+        vals = e.captures[2:end]
+        deleteat!(vals, find(x->x==nothing, vals))
+        for x in p.val
+            vals = map(val->replace(val, x...), vals)
+        end
+        push!(args, vals)
+    end
+    cmds, types, args
+end
+
+function doc(src::CHMSource{ENA.SYM}, file, text)
+    d = replace(file, "(", "%28")
+    d = lowercase(replace(d, ")", "%29"))
+    url = "http://ena.support.keysight.com/e5071c/manuals/webhelp/eng/"
+    ["- [External documentation]($url$d)"]
+end
+
+function rettype(src::CHMSource, text)
+    p = src.parser
+    entries = eachmatch(p.rettype, text)
+
+    rettypes = []
+    for e in entries
+        t = e.captures[1:end]
+        deleteat!(t, find(x->x==nothing, t))
+        push!(rettypes, e)
+    end
+    rettypes
 end
 
 """
@@ -297,7 +297,7 @@ Delete entries from the property dictionary at key values given by `itr`.
 """
 function delete!(path::AbstractString, itr)
     # splitext(inpath)[2] == ".json" || error("Not a JSON file.")
-    r = JSON.parsefile(path)
+    r = JSON.parsefile(path, dicttype=OrderedDict)
     d = r["properties"]
     for i in itr
         if haskey(d, i)
@@ -310,9 +310,24 @@ function delete!(path::AbstractString, itr)
     end
 end
 
+"""
+`allproperties(path::AbstractString, key::AbstractString)`
+
+Return all values for a given `key` from instrument property dictionaries in a
+JSON file at `path`.
+"""
+function allproperties(path::AbstractString, key::AbstractString)
+    r = JSON.parsefile(path, dicttype=OrderedDict)
+    d = r["properties"]
+    cmds = ASCIIString[]
+    for (k,v) in d
+        push!(cmds, v[key])
+    end
+    cmds
+end
 
 """
-`template(data, labels, outpath::AbstractString;
+`template(data, labels, ids, outpath::AbstractString;
     insdict=emptyinsdict(),
     merge::Bool=true)`
 
@@ -321,12 +336,11 @@ Writes a JSON file given `data` and `labels`. For example:
 ```
 data = [(":OUTPUT", "v::Bool", ""), (":OTHERCMD", "v::Symbol", "")]
 labels = ["cmd", "values", "type"]
-template(data, labels, "/my/path.json")
+template(data, labels, 1:2, "/my/path.json")
 ```
 
 Optionally `insdict` can be provided for the `"instrument"` field of the resulting
 JSON file, or if not provided a template is included to be filled in later.
-
 
 If `merge` is true, then the fields of any JSON file at `outpath` are retained
 and only previously undefined fields are added to the file in the corresponding
@@ -334,14 +348,14 @@ locations. The `cmd` field of a property dictionary is used to distinguish
 different instrument properties. It is recommended to work on a duplicate of
 the original file.
 """
-function template(data, labels, outpath::AbstractString;
+function template(data, labels, ids, outpath::AbstractString;
     insdict=emptyinsdict(),
     merge::Bool=true)
 
     if merge == true
         local r
         try
-            r = JSON.parsefile(outpath)
+            r = JSON.parsefile(outpath, dicttype=OrderedDict)
         catch e
             warn("No file found at `outpath` to merge with. Writing a new template.")
             return template(data, labels, outpath, insdict=insdict, merge=false)
@@ -357,42 +371,33 @@ function template(data, labels, outpath::AbstractString;
 
         # As a starting point go with the old properties array.
         if haskey(r, "properties")
-            proparr = r["properties"]
+            propdict = r["properties"]
         else
-            proparr = []
+            propdict = OrderedDict()
         end
 
         # Now process the new properties and merge with the old
-        for x in data
-            d = Dict(zip(labels, x))
-            # Any identical entries, looking at cmd field?
-            where = find(y->(y["cmd"]==d["cmd"]), proparr)
-            # If not, add it
-            if length(where) == 0
-                push!(proparr, d)
+        for (i,x) in enumerate(data)
+            d = OrderedDict(zip(labels, x))
+            if !haskey(propdict, ids[i])
+                propdict[ids[i]] = d
             else
-                # If more than one, warn and drop all but the first
-                if length(where) > 1
-                    warn("Duplicate `cmd` key: $(d["cmd"])")
-                    deleteat!(proparr, where[2:end])
-                end
-                idx = where[1]
-                olddict = proparr[idx]
+                olddict = propdict[ids[i]]
                 for k in keys(olddict)
                     d[k] = olddict[k]
                 end
-                proparr[idx] = d
+                propdict[ids[i]] = d
             end
         end
     else
         # Just start from scratch
-        proparr = []
-        for x in data
-            push!(proparr, Dict(zip(labels, x)))
+        propdict = OrderedDict()
+        for (i,x) in enumerate(data)
+            propdict[ids[i]] = OrderedDict(zip(labels, x))
         end
     end
 
-    temp = Dict("instrument"=>insdict, "properties"=>proparr)
+    temp = OrderedDict("instrument"=>insdict, "properties"=>propdict)
 
     # Write the dictionary to JSON
     open(outpath, "w") do f
@@ -419,9 +424,10 @@ Sets up an interactive prompt for diagnosing issues with files that are not
 correctly parsed by the given regular expressions. This is called e.g. whenever
 a .chm file is scraped, not directly by the user.
 """
-function diagnose(text)
-    println("Here are the pre-processed file contents:")
+function diagnose(text, message)
     println(text)
+    warn(message)
+    println("Above are the pre-processed file contents.")
     println("\nHow do you want to proceed? [i=ignoreall, a=abort, anything else to continue]")
     response = chomp(readline())
     if response == "a" || response == "abort"
@@ -439,11 +445,11 @@ end
 Returns a `Dict` intended to be used in an instrument JSON file for the "instrument"
 dictionary. It has the expected keys and corresponding empty string values.
 """
-emptyinsdict() = Dict("module" => "",
-                      "type"   => "",
-                      "make"   => "",
-                      "model"  => "",
-                      "writeterminator" => "")
+emptyinsdict() = OrderedDict("module" => "",
+                             "type"   => "",
+                             "make"   => "",
+                             "model"  => "",
+                             "writeterminator" => "")
 
 """
 `upperfirst(a::AbstractString)`
