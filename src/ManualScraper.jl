@@ -7,6 +7,7 @@ import Base: contains, delete!, show
 export CHMSource
 export Parser
 export @ena_str
+export @awg5k_str
 
 export scrape
 
@@ -29,9 +30,14 @@ end
 show(io::IO, x::CHMSource) = print(io, "CHM source at: $(x.path)")
 
 include("ENA.jl")
+include("AWG5K.jl")
 
 macro ena_str(path)
     CHMSource{ENA.SYM}(path, ENA.DIRS, ENA.FILTER, ENA.PARSER)
+end
+
+macro awg5k_str(path)
+    CHMSource{AWG5K.SYM}(path, AWG5K.DIRS, AWG5K.FILTER, AWG5K.PARSER)
 end
 
 """
@@ -131,21 +137,21 @@ function scrape(inpath::AbstractString, outpath::AbstractString)
         ["cmd","values","symbols","type"], outpath, insdict=insdict, merge=true)
 end
 
-
 function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
-    insdict=emptyinsdict())
+    insdict=emptyinsdict(), breakpoints=[])
 
     cmds = []
     types = []
     setargs = []
     getargs = []
+    syms = []
     rettypes = []
+    infixes = []
     docs = UTF8String[]
-    ids = Int64[]
+    writeonly = []
 
     flag = true
     f=CHM.open(src.path)
-    id=1
     try
         for directory in src.dirs
             files = CHM.readdir(f, directory)
@@ -158,15 +164,14 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     text = replace(text, x...)
                 end
 
-                # Parse for get / set capability.
+                # Parse for get / set capability if desired
                 _get, _set = cangetset(src, text)
-                if length(_get) == 0 || length(_set) == 0
+                if src.parser.getset != r"" && (length(_get) == 0 || length(_set) == 0)
                     flag && (flag = diagnose(text, "Could not determine read/write capability."))
                     continue
                 end
-                println(_get, _set)
 
-                _cmds, _types, _args = commands(src, text)
+                _cmds, _types, _args, _syms, _infixes = commands(src, text)
                 len = length(_cmds)
                 if len == 0
                     flag && (flag = diagnose(text, "Could not parse command in file: $file"))
@@ -178,7 +183,8 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                 for cmd in _cmds
                     if contains(cmd, ["{", "(", "["])
                         if contains(cmd, ["}", ")", "]"])
-                            warn("Uncaught braces in $cmd")
+                            flag && (flag = diagnose(text, "Uncaught braces in $cmd"))
+                            flag2 = true
                         else
                             flag && (flag = diagnose(text, "Suspect an incomplete command $cmd"))
                             flag2 = true
@@ -186,7 +192,13 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     end
                 end
                 flag2 && continue
-                println(_cmds,_types,_args)
+
+                for cmd in _cmds
+                    if findfirst(breakpoints, cmd) != 0
+                        flag && (flag = diagnose(text, "Hit a breakpoint."))
+                        continue
+                    end
+                end
 
                 _rettypes = rettype(src, text)
                 len = length(_rettypes)
@@ -194,7 +206,6 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     flag && (flag = diagnose(text, "Could not parse return types in file: $file"))
                     continue
                 end
-                println(_rettypes)
 
                 _docs = doc(src, file, text)
                 len = length(_docs)
@@ -203,30 +214,34 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     continue
                 end
 
-                _getargs, _setargs, _ids =
-                    finishfile!(src, _set, _get, _cmds, _types, _args, _rettypes, _docs, id)
-                for (x,y) in [(cmds, _cmds), (types, _types), (getargs, _getargs),
-                    (setargs, _setargs), (rettypes, _rettypes), (docs, _docs), (ids, _ids)]
+                _getargs, _setargs, _writeonly =
+                    finishfile!(src, _set, _get, _cmds, _infixes, _types, _args, _syms, _rettypes, _docs)
+                for (x,y) in [(cmds, _cmds), (infixes, _infixes), (types, _types), (getargs, _getargs),
+                    (setargs, _setargs), (syms, _syms), (rettypes, _rettypes), (docs, _docs),
+                    (writeonly, _writeonly)]
                     for z in y
                         push!(x,z)
                     end
                 end
+
             end
         end
     finally
         CHM.close(f)
     end
 
-    # length(commands) == length(types) == length(docs) ||
-        # error("It looks like not all the fields may be in sync!")
-
-    # template(zip(commands,setargs,getargs,types,docs),
-    #         ["cmd","setargs","getargs","type","docs"],
-    #         ids, outpath, insdict=insdict, merge=merge)
+    template(zip(cmds,infixes,types,setargs,getargs,docs,writeonly),
+            ["cmd","infixes","type","setargs","getargs","doc","writeonly"], syms,
+            outpath, insdict=insdict, merge=merge)
 end
 
 function cangetset(src::CHMSource, text)
     p = src.parser
+
+    if p.getset == r""
+        return [],[]
+    end
+
     entries = eachmatch(p.getset, text)
 
     getarray = Bool[]
@@ -248,43 +263,89 @@ end
 
 function commands(src::CHMSource, text)
     p = src.parser
-    entries = eachmatch(p.cmd, text)
+    # entries = eachmatch(p.cmd, text)
 
     cmds = ASCIIString[]
     types = ASCIIString[]
     args = []
+    syms = []
+    infixes = []
+    sregex = r"\|"
 
-    for e in entries
+    while (e = match(p.cmd, text)) != nothing
         rawcmd = e[1]
+
+        # We obliterate matches in the text as we go.
+        text = replace(text, ASCIIString(e.match), "")
+
+        # First pass of command regex replacement
         for x in p.cmd1
             rawcmd = replace(rawcmd, x...)
         end
+
+        # Make types from first pass results
         push!(types, cmdtostr(rawcmd))
 
+        # Second pass of command regex replacement
         for x in p.cmd2
             rawcmd = replace(rawcmd, x...)
         end
+
+        # Save command we discovered
         push!(cmds, rawcmd)
 
+        # Get infixes from that command (look for lowercase strings)
+        _infixes = []
+        inf = eachmatch(r"[a-z]+", rawcmd)
+        for g in inf
+            push!(_infixes, g.match*"::Integer=1") # assume Integers, default 1
+        end
+
+        # Process arguments
         vals = e.captures[2:end]
         deleteat!(vals, find(x->x==nothing, vals))
         for x in p.val
             vals = map(val->replace(val, x...), vals)
         end
+        vals = mapreduce(x->split(x,","), vcat, UTF8String[], vals)
+        s = OrderedDict()
+        for i in 1:length(vals)
+            # Make argument names unique
+            vals[i] = replace(vals[i], "v::", "v$i::")
+            # Replace symbols with appropriate arguments
+            if ismatch(sregex, vals[i])
+                vs = split(vals[i],"|")
+                ks = map(upperfirst, vs)
+                vs = map(x->replace(x,r"[a-z]",""), vs)
+                vals[i] = "v$i::Symbol in s$i"
+                s["s$i"] = OrderedDict(zip(ks,vs))
+            end
+        end
         push!(args, vals)
+        push!(syms, s)
+        push!(infixes, _infixes)
     end
-    cmds, types, args
+    cmds, types, args, syms, infixes
 end
 
 function doc(src::CHMSource{ENA.SYM}, file, text)
     d = replace(file, "(", "%28")
     d = lowercase(replace(d, ")", "%29"))
-    url = "http://ena.support.keysight.com/e5071c/manuals/webhelp/eng/"
+    url = "http://ena.support.keysight.com/e5071c/manuals/webhelp/eng"
     ["- [External documentation]($url$d)"]
 end
 
+function doc(src::CHMSource{AWG5K.SYM}, file, text)
+    ["Undocumented."]
+end
+
+
 function rettype(src::CHMSource, text)
     p = src.parser
+    if p.rettype == r""
+        return [nothing]
+    end
+
     entries = eachmatch(p.rettype, text)
 
     rettypes = []
@@ -296,35 +357,49 @@ function rettype(src::CHMSource, text)
     rettypes
 end
 
-rettype(src::CHMSource{ENA.SYM}, text) = [nothing]
-
-function finishfile!(src::CHMSource{ENA.SYM}, _set, _get, _cmds, _types, _args, _rettypes, _docs, id)
+function finishfile!(src::CHMSource{ENA.SYM},
+        _set, _get, _cmds, _infixes, _types, _args, _syms, _rettypes, _docs)
 
     getargs = []
     setargs = []
+    writeonly = Bool[]
     set = _set[1]
     get = _get[1]
     !set && !get && warn("Neither read nor write in `finishfile!`.")
 
+    # println(_cmds)
+    # println(_types)
+    # println(_args)
+    # println(_syms)
+    # println(_docs)
+    # chomp(readline())
+
     if !set && get# read only
         for i in _args
             push!(getargs, i)
-            push!(setargs, nothing)
+            push!(setargs, [])
+            push!(writeonly, false)
         end
     elseif !get && set# write only
         for i in _args
             push!(setargs, i)
-            push!(getargs, nothing)
+            push!(getargs, [])
+            push!(writeonly, true)
         end
     else
         getinds = find(x->x[end]=='?', _cmds)
         setinds = find(x->x[end]!='?', _cmds)
         for i in setinds
             push!(setargs, _args[i])
-            push!(getargs, _args[i+1])
+            push!(writeonly, false)
+        end
+        for i in getinds
+            push!(getargs, _args[i])
         end
         deleteat!(_cmds, getinds)
         deleteat!(_types, getinds)
+        deleteat!(_syms, getinds)
+        deleteat!(_infixes, getinds)
     end
 
     # Documentation goes on all the commands
@@ -332,18 +407,85 @@ function finishfile!(src::CHMSource{ENA.SYM}, _set, _get, _cmds, _types, _args, 
     while length(_docs) < length(_cmds)
         push!(_docs, d)
     end
+    while length(_docs) > length(_cmds)
+        d = pop!(_docs)
+        warn("Dropping documentation: $d")
+    end
 
-    ids = collect((1:length(_cmds))+(id-1))
+    for x in _cmds
+        info("Processed command: $x")
+    end
+
+    getargs, setargs, writeonly
+
+end
+
+function finishfile!(src::CHMSource{AWG5K.SYM},
+        _set, _get, _cmds, _infixes, _types, _args, _syms, _rettypes, _docs)
+
+    getargs = []
+    setargs = []
+    writeonly = Bool[]
 
     println(_cmds)
     println(_types)
-    println(getargs)
-    println(setargs)
+    println(_args)
+    println(_syms)
     println(_docs)
     chomp(readline())
 
-    getargs, setargs, ids
+    if length(_cmds) == 1
+        if _cmds[1][end]=='?'
+            (get = true; set = false)
+        else
+            (get = false; set = true)
+        end
+    else
+        get = true; set = true;
+    end
 
+    if !set && get# read only
+        for i in _args
+            push!(getargs, i)
+            push!(setargs, [])
+            push!(writeonly, false)
+        end
+    elseif !get && set# write only
+        for i in _args
+            push!(setargs, i)
+            push!(getargs, [])
+            push!(writeonly, true)
+        end
+    else
+        getinds = find(x->x[end]=='?', _cmds)
+        setinds = find(x->x[end]!='?', _cmds)
+        for i in setinds
+            push!(setargs, _args[i])
+            push!(writeonly, false)
+        end
+        for i in getinds
+            push!(getargs, _args[i])
+        end
+        deleteat!(_cmds, getinds)
+        deleteat!(_types, getinds)
+        deleteat!(_syms, getinds)
+        deleteat!(_infixes, getinds)
+    end
+
+    d = _docs[1]
+    while length(_docs) < length(_cmds)
+        push!(_docs, d)
+    end
+    while length(_docs) > length(_cmds)
+        d = pop!(_docs)
+        warn("Dropping documentation: $d")
+    end
+
+    for x in _cmds
+        info("Processed command: $x")
+    end
+
+    getargs, setargs, writeonly
 end
 
 """
@@ -398,16 +540,18 @@ template(data, labels, 1:2, "/my/path.json")
 Optionally `insdict` can be provided for the `"instrument"` field of the resulting
 JSON file, or if not provided a template is included to be filled in later.
 
-If `merge` is true, then the fields of any JSON file at `outpath` are retained
-and only previously undefined fields are added to the file in the corresponding
-locations. The `cmd` field of a property dictionary is used to distinguish
-different instrument properties. It is recommended to work on a duplicate of
-the original file.
+If `merge` is true, then the "type" and symbol fields of a JSON file at `outpath`
+are retained for a given `cmd`. The `cmd` field of a property dictionary is used
+to distinguish different instrument properties. The user is prompted to advise
+how to proceed if a new command is found that wasn't at `outpath`, and also
+if multiple entries are found with the same `cmd` field. It is recommended to
+work on a duplicate of the original file.
 """
-function template(data, labels, ids, outpath::AbstractString;
+function template(data, labels, syms, outpath::AbstractString;
     insdict=emptyinsdict(),
     merge::Bool=true)
 
+    keepall = false
     if merge == true
         local r
         try
@@ -427,33 +571,90 @@ function template(data, labels, ids, outpath::AbstractString;
 
         # As a starting point go with the old properties array.
         if haskey(r, "properties")
-            propdict = r["properties"]
+            proparr = r["properties"]
         else
-            propdict = OrderedDict()
+            proparr = []
         end
 
         # Now process the new properties and merge with the old
         for (i,x) in enumerate(data)
             d = OrderedDict(zip(labels, x))
-            if !haskey(propdict, ids[i])
-                propdict[ids[i]] = d
-            else
-                olddict = propdict[ids[i]]
-                for k in keys(olddict)
-                    d[k] = olddict[k]
+            for (k,v) in syms[i]
+                d[k] = v
+            end
+
+            ind = find(y->y["cmd"]==d["cmd"], proparr)
+            if length(ind) == 0
+                if keepall
+                    push!(proparr, d)
+                else
+                    # Ask if we should add this command.
+                    warn("""Command not found in old file: $(d["cmd"])""")
+                    println("How do you want to proceed? [a=abort, i=ignore, k=keepall, anything else to keep it]")
+                    response = chomp(readline())
+                    if response == "a" || response == "abort"
+                        error("Aborted!")
+                    end
+                    if response == "i" || response == "ignore"
+                    elseif response == "k" || response == "keepall"
+                        keepall = true
+                        push!(proparr, d)
+                    else
+                        push!(proparr, d)
+                    end
                 end
-                propdict[ids[i]] = d
+            else
+                if length(ind) > 1
+                    warn("""Multiple entries with same command: $(d["cmd"])""")
+                    println("How do you want to proceed? [a=abort, anything else to expunge all but first entry]")
+                    response = chomp(readline())
+                    if response == "a" || response == "abort"
+                        error("Aborted!")
+                    end
+                    deleteat!(proparr, ind[2:end])
+                end
+
+                olddict = proparr[ind[1]]
+
+                # Retain old types
+                if haskey(olddict, "type")
+                    d["type"] = olddict["type"]
+                end
+
+                # Retain old symbols
+                k1 = collect(keys(olddict))
+                symdicts = find(x->ismatch(r"s[0-9]+", x), k1)
+                for i in symdicts
+                    d[k1[i]] = olddict[k1[i]]
+                end
+
+                # Everything else, we take from the current parse pass
+                proparr[ind[1]] = d
             end
         end
     else
         # Just start from scratch
-        propdict = OrderedDict()
+        proparr = []
         for (i,x) in enumerate(data)
-            propdict[ids[i]] = OrderedDict(zip(labels, x))
+            d = OrderedDict(zip(labels, x))
+            for (k,v) in syms[i]
+                d[k] = v
+            end
+            push!(proparr, d)
         end
+
+        # Now look for duplicate cmds
+        for (i,d) in enumerate(proparr)
+            ind = find(y->y["cmd"]==d["cmd"], proparr)
+            if length(ind) > 1
+                warn("""Multiple entries with same command: $(d["cmd"]). Expunging all but first.""")
+                deleteat!(proparr, ind[2:end])
+            end
+        end
+
     end
 
-    temp = OrderedDict("instrument"=>insdict, "properties"=>propdict)
+    temp = OrderedDict("instrument"=>insdict, "properties"=>proparr)
 
     # Write the dictionary to JSON
     open(outpath, "w") do f
@@ -470,7 +671,8 @@ Returns a string based on a command, e.g. ":SOURCE:FUNCTION" becomes "SourceFunc
 """
 function cmdtostr(a::AbstractString)
     s = mapreduce(upperfirst, *, "", split(a,":"))
-    replace(s, r"[^A-Za-z]", "")    # only text
+    s = replace(s, r"(\[|\{)[A-Za-z0-9\|\-\[\]]+(\}|\])", "")    # only text
+    replace(s, "?", "")
 end
 
 """

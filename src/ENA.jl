@@ -15,6 +15,9 @@ const FILTER = r".htm$"
 # This is necessary due to inconsistencies in the HTML files.
 const INIT = [
 
+    # Remove control chars and extended chars except CR and LF.
+    (r"[^\x20-\x7e\x0a\x0d]", ""),
+
     # Remove certain tags that randomly interrupt command syntax
     ("<br />", ""),
     ("<br>", ""),
@@ -37,9 +40,12 @@ const INIT = [
 
     # Fix some syntactical typos
     (r"COLLect\s+:ITERation", "COLLect:ITERation"),
+    ("CALCulate{[1]-160}:TRACe(Tr):", "CALCulate{[1]-160}:TRACe{[1]-16}:"),
+    (":CALCulate{[1]-160]", ":CALCulate{[1]-160}"),
     (" [:", "[:"),
     (" :",":"),
     (" ?", "?"),
+    ("Aux1", "AUX1"),
     ("E/span&gt;", "..."),
     (r": ([A-Z]+)", s":\1"),
     (r"([A-Z]).VOLTage.", s"\1:VOLTage"),
@@ -54,7 +60,7 @@ const INIT = [
     (":[EXTernal]", "[:EXTernal]"),
     ("CALCulate[1-160]", "CALCulate{[1]-160}"),
     (r"STARt\|\s+STOP", "STARt|STOP"),
-    (r"R<\/p>\s+<p>1|R2|R3", "R1|R2|R3"),
+    (r"R<\/p>\s+<p>1\|R2\|R3", "R1|R2|R3"),
     (r"(EXTernal.SLOPe<\/h1>[\s]+<h2>Object type<\/h2>[\s]+<p>Property)(</p>)", s"\1 (Read-Write)\2"),
     (r"(REPort\.DATA[<>\/A-Za-z0-9\s=\"\-:';.&#]+<p>Property)(<\/p>)", s"\1 (Read-Only)\2"),
     (r"(&lt;string 1&gt;)(&lt;\^END&gt;)", s"\1&lt;newline&gt;\2"),
@@ -66,6 +72,7 @@ const INIT = [
     # ("&lt;value&gt;", "{value}"),
 
     # Make parsing more convenient in a few special cases
+    ("Data Array", "DataArray"),
     (r";([A-Za-z]+)\s+([0-9])&", s";\1\2&"),
     ("&quot;Sx1y1, Sx2y2, ... , Sxnxn&quot;", "&lt;string&gt;"),
     ("&lt;+ or -&gt;&lt;value of ", "&lt;"),
@@ -105,7 +112,8 @@ const GETSET_REGEX = r"((?:property)|(?:method)) \((?:(read|write|only)?[\-\s\/]
 #   2) Some text in curly braces
 # l5. optionally have a comma and/or whitespace, then repeat to l4
 # l6. optionally have whitespace, terminate with a </p> tag and optional whitespace.
-const CMD_REGEX = r"(?<=>\r\n)(?:<p>(:[:A-Za-z\(\)\-\{\}\[\]\|?0-9\\\n\r]+)\s*(?:(?:(&lt;[A-Z\(\)\s,a-z0-9]+&gt;)|\{([A-Za-z0-9\-\|]+)\}),*\s*)*\s*<\/p>\s*)"
+# const CMD_REGEX = r"(?<=>\r\n)(?:<p>(:[:A-Za-z\(\)\-\{\}\[\]\|?0-9\\\n\r]+)\s*(?:(?:(&lt;[A-Z\(\)\s,a-z0-9]+&gt;)|\{([A-Za-z0-9\-\|]+)\}),*\s*)*\s*<\/p>\s*)"
+const CMD_REGEX = r"(?<=>\r\n)(?:<p>(:[:A-Za-z\(\)\-\{\}\[\]\|?0-9\\\n\r]+)\s*((?:(?:(?:&lt;[A-Z\(\)\s,a-z0-9]+&gt;)|\{(?:[A-Za-z0-9\-\|]+)\}),*\s*)+)*\s*<\/p>\s*)"
 
 const CMD_PASS1 = [
     # Strip junk: stray HTML tag snippets
@@ -162,18 +170,17 @@ const CMD_PASS2 = [
 ]
 
 const ARG_PASS = [
+    (r"[\{\}\s]+", ""),
     ("ON|OFF|1|0", "v::Bool"),
-    ("numeric", "v::Real"),
-    ("&lt;string&gt;", "v::AbstractString"),
+    (r"&lt;numeric[0-9]?\(?[A-Za-z]*\)?&gt;", "v::Real"),
+    (r"&lt;value[0-9]?\(?[A-Za-z]*\)?&gt;", "v::Real"),
+    (r"&lt;string[0-9]?&gt;", "v::AbstractString"),
 ]
 
-const RETTYPE_REGEX = r"[Qq]uery [Rr]esponse<\/h[0-9]>\s+<p>(?:\{([A-Za-z0-9,_\-\?\|…\.\(\)\/\s]+)\},*\s*)*&lt;newline"
+const RETTYPE_REGEX = r""
+# const RETTYPE_REGEX = r"[Qq]uery [Rr]esponse<\/h[0-9]>\s+<p>(?:\{([A-Za-z0-9,_\-\?\|…\.\(\)\/\s]+)\},*\s*)*&lt;newline"
 
 const PARSER = Parser(INIT, GETSET_REGEX, CMD_REGEX, RETTYPE_REGEX,
     CMD_PASS1, CMD_PASS2, ARG_PASS)
-
-function finish()
-
-end
 
 end
