@@ -73,6 +73,26 @@ Usage: `src = ena"/path/to/file.chm"`
 
 When entering a file path using this macro, do not escape spaces in the path.
 
+<a id='ManualScraper.scrape' href='#ManualScraper.scrape'>#</a>
+**`ManualScraper.scrape`** &mdash; *Function*.
+
+---
+
+
+`scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,     insdict=emptyinsdict(), breakpoints=[])`
+
+Given a `CHMSource` object named `src` and an `outpath`, scrape information out of the CHM source into organized arrays, and pass that on to [`template`](index.md#ManualScraper.template) to assemble a JSON file.
+
+Keyword arguments:
+
+  * `merge::Bool=true`: Default to attempting to merge with a previous JSON file rather than overwriting. See the documentation for [`template`](index.md#ManualScraper.template) for further details.
+  * `insdict=emptyinsdict()`: Default to writing an empty instrument dictionary.
+  * `breakpoints=[]`: If this array has any command strings (as they appear in the processed JSON file) then we will pause at that command so the source file can be examined.
+
+`scrape(inpath::AbstractString, outpath::AbstractString)`
+
+Function used to scrape information out of the Yokogawa GS200 manual. The manual should be exported to plain text using Adobe Acrobat as other choices seem to give poor results. Eventually this will be restructured to accommodate any plain text file.
+
 
 <a id='Internal-1'></a>
 

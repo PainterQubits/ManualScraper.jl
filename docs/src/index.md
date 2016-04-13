@@ -46,6 +46,7 @@ from old versions of template files.
     {docs}
     @awg5k_str
     @ena_str
+    scrape
 
 ### Internal
 
