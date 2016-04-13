@@ -38,7 +38,7 @@ const INIT = [
     (r"\s+\|", "|"),
     (r"\|\s+", "|"),
 
-    # Fix some syntactical typos
+    # Fix some syntactical typos. There are a lot, thanks Keysight
     (r"COLLect\s+:ITERation", "COLLect:ITERation"),
     ("CALCulate{[1]-160}:TRACe(Tr):", "CALCulate{[1]-160}:TRACe{[1]-16}:"),
     (":CALCulate{[1]-160]", ":CALCulate{[1]-160}"),
@@ -169,6 +169,8 @@ const CMD_PASS2 = [
     (r"(VOLT)\{[\[\]0-9\-\|]+\}",  s"\1auxpt")
 ]
 
+const ARG_REGEX = r""
+
 const ARG_PASS = [
     (r"[\{\}\s]+", ""),
     ("ON|OFF|1|0", "v::Bool"),
@@ -181,6 +183,6 @@ const RETTYPE_REGEX = r""
 # const RETTYPE_REGEX = r"[Qq]uery [Rr]esponse<\/h[0-9]>\s+<p>(?:\{([A-Za-z0-9,_\-\?\|…\.\(\)\/\s]+)\},*\s*)*&lt;newline"
 
 const PARSER = Parser(INIT, GETSET_REGEX, CMD_REGEX, RETTYPE_REGEX,
-    CMD_PASS1, CMD_PASS2, ARG_PASS)
+    CMD_PASS1, CMD_PASS2, ARG_REGEX, ARG_PASS)
 
 end

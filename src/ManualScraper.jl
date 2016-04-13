@@ -18,6 +18,7 @@ immutable Parser
     rettype::Regex
     cmd1::AbstractArray
     cmd2::AbstractArray
+    arg::Regex
     val::AbstractArray
 end
 
@@ -141,14 +142,15 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
     insdict=emptyinsdict(), breakpoints=[])
 
     cmds = []
+    infixes = []
     types = []
-    setargs = []
     getargs = []
+    setargs = []
     syms = []
     rettypes = []
-    infixes = []
     docs = UTF8String[]
     writeonly = []
+    allfiles = (cmds, infixes, types, getargs, setargs, syms, docs, writeonly)
 
     flag = true
     f=CHM.open(src.path)
@@ -171,7 +173,8 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     continue
                 end
 
-                _cmds, _types, _args, _syms, _infixes = commands(src, text)
+                # Get commands and list of arguments
+                _cmds, _types, _args, _infixes = commands(src, text)
                 len = length(_cmds)
                 if len == 0
                     flag && (flag = diagnose(text, "Could not parse command in file: $file"))
@@ -200,6 +203,17 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     end
                 end
 
+                # Parse arguments and find symbols
+                argdict = Dict()
+                if src.parser.arg != r""
+                    for h in eachmatch(src.parser.arg, text)
+                        argdict[h[1]] = h[2]
+                    end
+                end
+                _syms = args!(src, _args, argdict)
+                println(argdict)
+
+                # Parse for return type of get methods
                 _rettypes = rettype(src, text)
                 len = length(_rettypes)
                 if len == 0 && reduce(|, _get)
@@ -207,6 +221,7 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     continue
                 end
 
+                # Assemble documentation
                 _docs = doc(src, file, text)
                 len = length(_docs)
                 if len == 0
@@ -214,14 +229,28 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
                     continue
                 end
 
-                _getargs, _setargs, _writeonly =
-                    finishfile!(src, _set, _get, _cmds, _infixes, _types, _args, _syms, _rettypes, _docs)
-                for (x,y) in [(cmds, _cmds), (infixes, _infixes), (types, _types), (getargs, _getargs),
-                    (setargs, _setargs), (syms, _syms), (rettypes, _rettypes), (docs, _docs),
-                    (writeonly, _writeonly)]
+                # Do a final pass for consistency of array lengths, etc.
+                _getargs, _setargs, _writeonly = finishfile!(src,
+                    _set, _get, _cmds, _infixes, _types, _args, _syms, _rettypes, _docs)
+
+                # all equal lengths?
+                valid = reduce(==, extrema(map(length, (_cmds, _types, _getargs, _setargs, _docs))))
+                if !valid
+                    warn("Could not process file: $file")
+                    warn("cmds: $(length(_cmds)) types: $(length(_types)) get: $(length(_getargs)) set: $(length(_setargs)) docs: $(length(_docs))")
+                    println(_cmds, _types, _getargs, _setargs, _docs)
+                    continue
+                end
+
+                # Keep everything we've learned from this file
+                thisfile = (_cmds, _infixes, _types, _getargs, _setargs, _syms, _docs, _writeonly)
+                for (x,y) in zip(allfiles, thisfile)
                     for z in y
                         push!(x,z)
                     end
+                end
+                for x in _cmds
+                    info("Processed command: $x")
                 end
 
             end
@@ -230,6 +259,7 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
         CHM.close(f)
     end
 
+    # Save to JSON template file
     template(zip(cmds,infixes,types,setargs,getargs,docs,writeonly),
             ["cmd","infixes","type","setargs","getargs","doc","writeonly"], syms,
             outpath, insdict=insdict, merge=merge)
@@ -270,7 +300,7 @@ function commands(src::CHMSource, text)
     args = []
     syms = []
     infixes = []
-    sregex = r"\|"
+    argdict = Dict()
 
     while (e = match(p.cmd, text)) != nothing
         rawcmd = e[1]
@@ -300,32 +330,69 @@ function commands(src::CHMSource, text)
         for g in inf
             push!(_infixes, g.match*"::Integer=1") # assume Integers, default 1
         end
+        push!(infixes, _infixes)
 
-        # Process arguments
+        # Retain arguments
         vals = e.captures[2:end]
         deleteat!(vals, find(x->x==nothing, vals))
-        for x in p.val
-            vals = map(val->replace(val, x...), vals)
-        end
-        vals = mapreduce(x->split(x,","), vcat, UTF8String[], vals)
-        s = OrderedDict()
-        for i in 1:length(vals)
-            # Make argument names unique
-            vals[i] = replace(vals[i], "v::", "v$i::")
-            # Replace symbols with appropriate arguments
-            if ismatch(sregex, vals[i])
-                vs = split(vals[i],"|")
-                ks = map(upperfirst, vs)
-                vs = map(x->replace(x,r"[a-z]",""), vs)
-                vals[i] = "v$i::Symbol in s$i"
-                s["s$i"] = OrderedDict(zip(ks,vs))
+        push!(args, vals)
+    end
+
+    cmds, types, args, infixes
+end
+
+"""
+`args!(src::CHMSource, args)`
+
+args: array of arrays, one array entry for each command with multiple arguments.
+"""
+function args!(src::CHMSource, args, argdict)
+    p = src.parser
+    syms = []
+    sregex = r"\|"
+
+    # Initial pass of argument replacement
+    for i in 1:length(args)
+        args[i] = convert(Array{ASCIIString,1}, args[i])
+        arr = args[i]
+        for j in 1:length(arr)
+            for (k,v) in argdict
+                arr[j] = replace(arr[j], k, v)
             end
         end
-        push!(args, vals)
-        push!(syms, s)
-        push!(infixes, _infixes)
     end
-    cmds, types, args, syms, infixes
+    if p.val != r""
+        for i in 1:length(args)
+            for x in p.val
+                args[i] = map(val->replace(val, x...), args[i])
+            end
+        end
+    end
+
+    for i in 1:length(args)
+        s = OrderedDict()
+
+        # Separate entries which are still connected by commas
+        args[i] = mapreduce(x->split(x,","), vcat, UTF8String[], args[i])
+
+        arr = args[i]
+        for j in 1:length(arr)
+            # Make argument names unique
+            arr[j] = replace(arr[j], "v::", "v$j::")
+
+            # Replace symbols with appropriate arguments
+            if ismatch(sregex, arr[j])
+                vs = split(arr[j], "|")
+                ks = map(upperfirst, vs)
+                vs = map(x->replace(x,r"[a-z]",""), vs)
+                arr[j] = "v$j::Symbol in s$j"
+                s["s$j"] = OrderedDict(zip(ks,vs))
+            end
+        end
+
+        push!(syms, s)
+    end
+    syms
 end
 
 function doc(src::CHMSource{ENA.SYM}, file, text)
@@ -336,7 +403,7 @@ function doc(src::CHMSource{ENA.SYM}, file, text)
 end
 
 function doc(src::CHMSource{AWG5K.SYM}, file, text)
-    ["Undocumented."]
+    [""]
 end
 
 
@@ -387,33 +454,28 @@ function finishfile!(src::CHMSource{ENA.SYM},
             push!(writeonly, true)
         end
     else
+        # only retain the write commands
         getinds = find(x->x[end]=='?', _cmds)
         setinds = find(x->x[end]!='?', _cmds)
-        for i in setinds
-            push!(setargs, _args[i])
-            push!(writeonly, false)
-        end
-        for i in getinds
-            push!(getargs, _args[i])
-        end
         deleteat!(_cmds, getinds)
         deleteat!(_types, getinds)
         deleteat!(_syms, getinds)
         deleteat!(_infixes, getinds)
+
+        for i in setinds
+            length(setargs) < length(_cmds)   && push!(setargs, _args[i])
+            length(writeonly) < length(_cmds) && push!(writeonly, false)
+        end
+
+        for i in getinds
+            length(getargs) < length(_cmds) && push!(getargs, _args[i])
+        end
     end
 
     # Documentation goes on all the commands
     d = _docs[1]
     while length(_docs) < length(_cmds)
         push!(_docs, d)
-    end
-    while length(_docs) > length(_cmds)
-        d = pop!(_docs)
-        warn("Dropping documentation: $d")
-    end
-
-    for x in _cmds
-        info("Processed command: $x")
     end
 
     getargs, setargs, writeonly
@@ -459,17 +521,19 @@ function finishfile!(src::CHMSource{AWG5K.SYM},
     else
         getinds = find(x->x[end]=='?', _cmds)
         setinds = find(x->x[end]!='?', _cmds)
-        for i in setinds
-            push!(setargs, _args[i])
-            push!(writeonly, false)
-        end
-        for i in getinds
-            push!(getargs, _args[i])
-        end
         deleteat!(_cmds, getinds)
         deleteat!(_types, getinds)
         deleteat!(_syms, getinds)
         deleteat!(_infixes, getinds)
+
+        for i in setinds
+            length(setargs) < length(_cmds)   && push!(setargs, _args[i])
+            length(writeonly) < length(_cmds) && push!(writeonly, false)
+        end
+
+        for i in getinds
+            length(getargs) < length(_cmds) && push!(getargs, _args[i])
+        end
     end
 
     d = _docs[1]
