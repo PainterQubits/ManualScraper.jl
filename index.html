@@ -238,7 +238,7 @@
 <p>Get a plain-text or HTML file to parse that describes the instrument commands. This may be the hardest part as often times only a PDF file is provided. If the instrument has an on-board Windows computer, it will likely have a .CHM file from which HTML can be retrieved using <code>CHM.jl</code>. If the instrument only has a PDF file, I've achieved the best results in extracting text using Adobe Acrobat. There are open-source packages to do this but the results are often worse, at least with limited tweaking.</p>
 </li>
 <li>
-<p>Construct a regular expression to peel the required information out of the plain-text or HTML. You will want to extract the commands, argument types, and possibly documentation (although be careful with copyright if sharing). For constructing the regular expressions, it is probably easiest to use an interactive website that shows the results of the regex search as you construct the expression. Just search for "regular expression tester" and look for one that supports PCRE regex.</p>
+<p>Construct regular expressions to peel the required information out of the plain-text, HTML, etc. You will want to extract the commands, argument types, and possibly documentation (although be careful with copyright if sharing). For constructing the regular expressions, it is probably easiest to use an interactive website that shows the results of the regex search as you construct the expression. Just search for "regular expression tester" and look for one that supports PCRE regex.</p>
 </li>
 <li>
 <p>Collect the information from the regex search into arrays. See existing examples for how to do this.</p>
@@ -249,29 +249,57 @@
 </ol>
 <p><a id='API-1'></a></p>
 <h2 id="api">API</h2>
-<p><a id='ManualScraper.template' href='#ManualScraper.template'>#</a>
-<strong><code>ManualScraper.template</code></strong> &mdash; <em>Function</em>.</p>
+<p><a id='Macros-1'></a></p>
+<h3 id="macros">Macros</h3>
+<p><a id='ManualScraper.@awg5k_str' href='#ManualScraper.@awg5k_str'>#</a>
+<strong><code>ManualScraper.@awg5k_str</code></strong> &mdash; <em>Macro</em>.</p>
 <hr />
-<p><code>template(data, labels, outpath::AbstractString;     insdict=emptyinsdict(),     merge::Bool=true)</code></p>
-<p>Writes a JSON file given <code>data</code> and <code>labels</code>. For example:</p>
-<div class="codehilite"><pre><span></span>data = [(&quot;:OUTPUT&quot;, &quot;v::Bool&quot;, &quot;&quot;), (&quot;:OTHERCMD&quot;, &quot;v::Symbol&quot;, &quot;&quot;)]
-labels = [&quot;cmd&quot;, &quot;values&quot;, &quot;type&quot;]
-template(data, labels, &quot;/my/path.json&quot;)
-</pre></div>
-
-
-<p>Optionally <code>insdict</code> can be provided for the <code>"instrument"</code> field of the resulting JSON file, or if not provided a template is included to be filled in later.</p>
-<p>If <code>merge</code> is true, then the fields of any JSON file at <code>outpath</code> are retained and only previously undefined fields are added to the file in the corresponding locations. The <code>cmd</code> field of a property dictionary is used to distinguish different instrument properties. It is recommended to work on a duplicate of the original file.</p>
+<p><code>@awg5k_str(path)</code></p>
+<p>String macro. Given a path to the Tektronix AWG5000 series' .chm file, construct a <code>CHMSource</code> that contains information on how to parse the .chm file.</p>
+<p>Usage: <code>src = awg5k"/path/to/file.chm"</code></p>
+<p>When entering a file path using this macro, do not escape spaces in the path.</p>
+<p><a id='ManualScraper.@ena_str' href='#ManualScraper.@ena_str'>#</a>
+<strong><code>ManualScraper.@ena_str</code></strong> &mdash; <em>Macro</em>.</p>
+<hr />
+<p><code>@ena_str(path)</code></p>
+<p>String macro. Given a path to the Keysight ENA's .chm file, construct a <code>CHMSource</code> that contains information on how to parse the .chm file.</p>
+<p>Usage: <code>src = ena"/path/to/file.chm"</code></p>
+<p>When entering a file path using this macro, do not escape spaces in the path.</p>
+<p><a id='Internal-1'></a></p>
+<h3 id="internal">Internal</h3>
 <p><a id='ManualScraper.cmdtostr' href='#ManualScraper.cmdtostr'>#</a>
 <strong><code>ManualScraper.cmdtostr</code></strong> &mdash; <em>Function</em>.</p>
 <hr />
 <p><code>cmdtostr(a::AbstractString)</code></p>
 <p>Returns a string based on a command, e.g. ":SOURCE:FUNCTION" becomes "SourceFunction".</p>
+<p><a id='ManualScraper.diagnose' href='#ManualScraper.diagnose'>#</a>
+<strong><code>ManualScraper.diagnose</code></strong> &mdash; <em>Function</em>.</p>
+<hr />
+<p><code>diagnose(text)</code></p>
+<p>Sets up an interactive prompt for diagnosing issues with files that are not correctly parsed by the given regular expressions. This is called e.g. whenever a .chm file is scraped, not directly by the user.</p>
 <p><a id='ManualScraper.emptyinsdict' href='#ManualScraper.emptyinsdict'>#</a>
 <strong><code>ManualScraper.emptyinsdict</code></strong> &mdash; <em>Function</em>.</p>
 <hr />
 <p><code>emptyinsdict()</code></p>
 <p>Returns a <code>Dict</code> intended to be used in an instrument JSON file for the "instrument" dictionary. It has the expected keys and corresponding empty string values.</p>
+<p><a id='ManualScraper.template' href='#ManualScraper.template'>#</a>
+<strong><code>ManualScraper.template</code></strong> &mdash; <em>Function</em>.</p>
+<hr />
+<p><code>template(data, labels, ids, outpath::AbstractString;     insdict=emptyinsdict(),     merge::Bool=true)</code></p>
+<p>Writes a JSON file given <code>data</code> and <code>labels</code>. For example:</p>
+<div class="codehilite"><pre><span></span>data = [(&quot;:OUTPUT&quot;, &quot;v::Bool&quot;, &quot;&quot;), (&quot;:OTHERCMD&quot;, &quot;v::Symbol&quot;, &quot;&quot;)]
+labels = [&quot;cmd&quot;, &quot;values&quot;, &quot;type&quot;]
+template(data, labels, 1:2, &quot;/my/path.json&quot;)
+</pre></div>
+
+
+<p>Optionally <code>insdict</code> can be provided for the <code>"instrument"</code> field of the resulting JSON file, or if not provided a template is included to be filled in later.</p>
+<p>If <code>merge</code> is true, then the "type" and symbol fields of a JSON file at <code>outpath</code> are retained for a given <code>cmd</code>. The <code>cmd</code> field of a property dictionary is used to distinguish different instrument properties. The user is prompted to advise how to proceed if a new command is found that wasn't at <code>outpath</code>, and also if multiple entries are found with the same <code>cmd</code> field. It is recommended to work on a duplicate of the original file.</p>
+<p><a id='ManualScraper.upperfirst' href='#ManualScraper.upperfirst'>#</a>
+<strong><code>ManualScraper.upperfirst</code></strong> &mdash; <em>Function</em>.</p>
+<hr />
+<p><code>upperfirst(a::AbstractString)</code></p>
+<p>Returns a string based on <code>a</code> with the first character only in uppercase.</p>
           <aside class="copyright" role="note">
             
             Documentation built with
