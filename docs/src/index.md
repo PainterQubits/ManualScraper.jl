@@ -1,17 +1,14 @@
-ManualScraper.jl
-============
+# ManualScraper.jl
 
 A package for scraping instrument manuals to assemble standardized templates
 of commands and documentation.
 
-Installation
-------------
+## Installation
 
 + Install package [`CHM.jl`](https://github.com/ajkeller34/CHM.jl).
 + `Pkg.clone("https://github.com/ajkeller34/ManualScraper.jl.git")`
 
-Usage
------
+## Usage
 
 This package is not entirely automated; to do so would require some intelligent
 parsing that would be far more complicated. Think of this package as a repository
@@ -27,8 +24,8 @@ If the instrument only has a PDF file, I've achieved the best results in
 extracting text using Adobe Acrobat. There are open-source packages to do this
 but the results are often worse, at least with limited tweaking.
 
-2. Construct a regular expression to peel the required information out of the
-plain-text or HTML. You will want to extract the commands, argument types, and
+2. Construct regular expressions to peel the required information out of the
+plain-text, HTML, etc. You will want to extract the commands, argument types, and
 possibly documentation (although be careful with copyright if sharing). For
 constructing the regular expressions, it is probably easiest to use an
 interactive website that shows the results of the regex search as you construct the
@@ -42,11 +39,19 @@ for how to do this.
 information into the desired template file. It is capable of merging information
 from old versions of template files.
 
-API
----
+## API
+
+### Macros
 
     {docs}
-    man_str
-    ManualScraper.template
+    @awg5k_str
+    @ena_str
+
+### Internal
+
+    {docs}
     ManualScraper.cmdtostr
+    ManualScraper.diagnose
     ManualScraper.emptyinsdict
+    ManualScraper.template
+    ManualScraper.upperfirst

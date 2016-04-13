@@ -30,15 +30,36 @@ immutable CHMSource{T}
 end
 show(io::IO, x::CHMSource) = print(io, "CHM source at: $(x.path)")
 
+# Modules describing how to parse each different .chm file.
 include("ENA.jl")
 include("AWG5K.jl")
 
-macro ena_str(path)
-    CHMSource{ENA.SYM}(path, ENA.DIRS, ENA.FILTER, ENA.PARSER)
-end
+"""
+`@awg5k_str(path)`
 
+String macro. Given a path to the Tektronix AWG5000 series' .chm file,
+construct a `CHMSource` that contains information on how to parse the .chm file.
+
+Usage: `src = awg5k"/path/to/file.chm"`
+
+When entering a file path using this macro, do not escape spaces in the path.
+"""
 macro awg5k_str(path)
     CHMSource{AWG5K.SYM}(path, AWG5K.DIRS, AWG5K.FILTER, AWG5K.PARSER)
+end
+
+"""
+`@ena_str(path)`
+
+String macro. Given a path to the Keysight ENA's .chm file, construct a
+`CHMSource` that contains information on how to parse the .chm file.
+
+Usage: `src = ena"/path/to/file.chm"`
+
+When entering a file path using this macro, do not escape spaces in the path.
+"""
+macro ena_str(path)
+    CHMSource{ENA.SYM}(path, ENA.DIRS, ENA.FILTER, ENA.PARSER)
 end
 
 """
@@ -46,15 +67,20 @@ end
 
 Returns a ValueIterator of the capture group names for a given Regex.
 Test to see if a name is there via: `"abc" in capture_names(r)`
+
+Not really used in the code but I thought it was strange that it is not in Base.
 """
 function capture_names(r::Regex)
     values(Base.PCRE.capture_names(r.regex))
 end
 
 """
+`scrape(inpath::AbstractString, outpath::AbstractString)`
+
 Function used to scrape information out of the Yokogawa GS200 manual.
 The manual should be exported to plain text using Adobe Acrobat as other
 choices seem to give poor results.
+Eventually this will be restructured to accommodate any plain text file.
 """
 function scrape(inpath::AbstractString, outpath::AbstractString)
     f = open(inpath)
@@ -138,6 +164,25 @@ function scrape(inpath::AbstractString, outpath::AbstractString)
         ["cmd","values","symbols","type"], outpath, insdict=insdict, merge=true)
 end
 
+"""
+`scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
+    insdict=emptyinsdict(), breakpoints=[])`
+
+Given a `CHMSource` object named `src` and an `outpath`, scrape information out
+of the CHM source into organized arrays, and pass that on to [`template`]({ref})
+to assemble a JSON file.
+
+Keyword arguments:
+
+- `merge::Bool=true`: Default to attempting to merge with a previous JSON file
+rather than overwriting. See the documentation for [`template`]({ref}) for
+further details.
+- `insdict=emptyinsdict()`: Default to writing an empty instrument dictionary.
+- `breakpoints=[]`: If this array has any command strings (as they appear in
+the processed JSON file) then we will pause at that command so the source file
+can be examined.
+
+"""
 function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
     insdict=emptyinsdict(), breakpoints=[])
 
@@ -265,6 +310,12 @@ function scrape(src::CHMSource, outpath::AbstractString; merge::Bool=true,
             outpath, insdict=insdict, merge=merge)
 end
 
+"""
+`cangetset(src::CHMSource, text)`
+
+Parse text for get and set capability of commands in the file.
+Called by [`scrape`]({ref}). This is not sufficiently general yet.
+"""
 function cangetset(src::CHMSource, text)
     p = src.parser
 
@@ -291,6 +342,11 @@ function cangetset(src::CHMSource, text)
     getarray, setarray
 end
 
+"""
+`commands(src::CHMSource, text)`
+
+Parse text for commands. Called by [`scrape`]({ref}).
+"""
 function commands(src::CHMSource, text)
     p = src.parser
     # entries = eachmatch(p.cmd, text)
@@ -344,7 +400,9 @@ end
 """
 `args!(src::CHMSource, args)`
 
-args: array of arrays, one array entry for each command with multiple arguments.
+`args`: array of arrays, one array entry for each command with multiple arguments.
+
+Called by [`scrape`]({ref}).
 """
 function args!(src::CHMSource, args, argdict)
     p = src.parser
