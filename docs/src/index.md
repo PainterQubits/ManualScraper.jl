@@ -35,7 +35,7 @@ supports PCRE regex.
 3. Collect the information from the regex search into arrays. See existing examples
 for how to do this.
 
-4. Use the [`ManualScraper.template`]({ref}) function to turn the collected
+4. Use the [`ManualScraper.template`](@ref) function to turn the collected
 information into the desired template file. It is capable of merging information
 from old versions of template files.
 
@@ -43,16 +43,18 @@ from old versions of template files.
 
 ### Macros
 
-    {docs}
-    @awg5k_str
-    @ena_str
-    scrape
+```@docs
+@awg5k_str
+@ena_str
+scrape
+```
 
 ### Internal
 
-    {docs}
-    ManualScraper.cmdtostr
-    ManualScraper.diagnose
-    ManualScraper.emptyinsdict
-    ManualScraper.template
-    ManualScraper.upperfirst
+```@docs
+ManualScraper.cmdtostr
+ManualScraper.diagnose
+ManualScraper.emptyinsdict
+ManualScraper.template
+ManualScraper.upperfirst
+```
