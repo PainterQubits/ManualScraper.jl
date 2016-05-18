@@ -169,13 +169,13 @@ end
     insdict=emptyinsdict(), breakpoints=[])`
 
 Given a `CHMSource` object named `src` and an `outpath`, scrape information out
-of the CHM source into organized arrays, and pass that on to [`template`]({ref})
+of the CHM source into organized arrays, and pass that on to [`template`](@ref)
 to assemble a JSON file.
 
 Keyword arguments:
 
 - `merge::Bool=true`: Default to attempting to merge with a previous JSON file
-rather than overwriting. See the documentation for [`template`]({ref}) for
+rather than overwriting. See the documentation for [`template`](@ref) for
 further details.
 - `insdict=emptyinsdict()`: Default to writing an empty instrument dictionary.
 - `breakpoints=[]`: If this array has any command strings (as they appear in
@@ -314,7 +314,7 @@ end
 `cangetset(src::CHMSource, text)`
 
 Parse text for get and set capability of commands in the file.
-Called by [`scrape`]({ref}). This is not sufficiently general yet.
+Called by [`scrape`](@ref). This is not sufficiently general yet.
 """
 function cangetset(src::CHMSource, text)
     p = src.parser
@@ -345,7 +345,7 @@ end
 """
 `commands(src::CHMSource, text)`
 
-Parse text for commands. Called by [`scrape`]({ref}).
+Parse text for commands. Called by [`scrape`](@ref).
 """
 function commands(src::CHMSource, text)
     p = src.parser
@@ -402,7 +402,7 @@ end
 
 `args`: array of arrays, one array entry for each command with multiple arguments.
 
-Called by [`scrape`]({ref}).
+Called by [`scrape`](@ref).
 """
 function args!(src::CHMSource, args, argdict)
     p = src.parser
